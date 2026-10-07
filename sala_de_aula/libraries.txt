@@ -1,0 +1,6 @@
+Adafruit GFX Library
+Adafruit BusIO
+Adafruit ILI9341
+Adafruit NeoPixel
+Keypad
+ESP32Servo
