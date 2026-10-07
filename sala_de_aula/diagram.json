@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "author": "proj-sistembarcados",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp",
+      "top": 160,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-membrane-keypad",
+      "id": "keypad",
+      "top": -260,
+      "left": -220,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-ili9341",
+      "id": "lcd",
+      "top": -250,
+      "left": 250,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-led-strip",
+      "id": "strip",
+      "top": 20,
+      "left": 420,
+      "attrs": { "pixels": "8" }
+    },
+    {
+      "type": "wokwi-servo",
+      "id": "servo",
+      "top": 340,
+      "left": 340,
+      "attrs": {}
+    }
+  ],
+  "connections": [
+    ["esp:3V3", "lcd:VCC", "red", []],
+    ["esp:GND.1", "lcd:GND", "black", []],
+    ["esp:D23", "lcd:MOSI", "green", []],
+    ["esp:D18", "lcd:SCK", "green", []],
+    ["esp:D14", "lcd:CS", "green", []],
+    ["esp:D21", "lcd:D/C", "green", []],
+
+    ["esp:D19", "keypad:R1", "black", []],
+    ["esp:D18", "keypad:R2", "orange", []],
+    ["esp:D5", "keypad:R3", "black", []],
+    ["esp:D17", "keypad:R4", "black", []],
+    ["esp:D16", "keypad:C1", "orange", []],
+    ["esp:D4", "keypad:C2", "orange", []],
+    ["esp:D0", "keypad:C3", "orange", []],
+    ["esp:D2", "keypad:C4", "orange", []],
+
+    ["esp:D15", "strip:DIN", "green", []],
+    ["esp:5V", "strip:VDD", "red", []],
+    ["esp:GND.2", "strip:VSS", "black", []],
+
+    ["esp:D13", "servo:PWM", "orange", []],
+    ["esp:5V", "servo:V+", "red", []],
+    ["esp:GND.3", "servo:GND", "black", []]
+  ],
+  "dependencies": {}
+}
