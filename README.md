@@ -1,5 +1,9 @@
 # Projeto de IoT e Sistemas Embarcados: Sala Automatizada
-
+## Equipe:
+- Anna Clara B Lima
+- Luisa de Andrade Deschamps
+- Raissa S. A. S. Almeida
+  
 Sistema completo de controle de acesso, automação de ambiente e monitoramento IoT integrado entre **Microcontrolador ESP32 (Arduino / Wokwi)**, **Plataforma IoT na Nuvem (TagoIO)** e **Aplicativo Mobile (Android / Jetpack Compose)**.
 
 ---
