@@ -24,9 +24,9 @@ data class RoomTelemetry(
     val currentUser: String = "Nenhum",
     val curtains: String = "Fechada",
     val acOn: Boolean = false,
-    val temperature: Float = 24.0f,
+    val temperature: Float = 24.5f,
     val lightColor: String = "Desligado",
-    val lastAlert: String = "Sistema Normal",
+    val lastAlert: String = "Sistema Pronto",
     val timestamp: Long = System.currentTimeMillis(),
     val isOnline: Boolean = false
 )
@@ -114,7 +114,8 @@ class TagoIoRoomGateway(context: Context) : RoomGateway {
             currentUser = if (value) "Aluno (Simulado)" else "Nenhum",
             acOn = value,
             curtains = if (value) "Aberta" else "Fechada",
-            temperature = if (value) 22.0f else 26.5f
+            temperature = if (value) 22.0f else 26.5f,
+            lastAlert = if (value) "Presença detectada (Simulado)" else "Sala desocupada"
         )
         saveLocalTelemetry(updated)
     }
@@ -134,8 +135,8 @@ class TagoIoRoomGateway(context: Context) : RoomGateway {
     }
 
     /**
-     * Consulta a API do TagoIO (GET https://api.tago.io/data?query=last_value)
-     * e atualiza o estado da sala no app.
+     * Consulta a API do TagoIO (GET /data?qty=40)
+     * e atualiza o estado de todas as variáveis da sala no app.
      */
     override suspend fun syncFromCloud(): Result<RoomTelemetry> = withContext(Dispatchers.IO) {
         val token = getCloudToken()
@@ -144,73 +145,90 @@ class TagoIoRoomGateway(context: Context) : RoomGateway {
             return@withContext Result.success(_telemetry.value)
         }
 
-        try {
-            val url = URL("https://api.tago.io/data?query=last_value")
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "GET"
-            conn.setRequestProperty("Device-Token", token)
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.connectTimeout = 7000
-            conn.readTimeout = 7000
+        // Tenta os endpoints regionais suportados pelo TagoIO
+        val endpoints = listOf(
+            "https://api.us-e1.tago.io/data?qty=40",
+            "https://api.tago.io/data?qty=40"
+        )
 
-            val responseCode = conn.responseCode
-            if (responseCode in 200..299) {
-                val reader = BufferedReader(InputStreamReader(conn.inputStream))
-                val response = reader.readText()
-                reader.close()
+        for (endpoint in endpoints) {
+            try {
+                val url = URL(endpoint)
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "GET"
+                conn.setRequestProperty("Device-Token", token)
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.connectTimeout = 6000
+                conn.readTimeout = 6000
 
-                val jsonResponse = JSONObject(response)
-                val resultArray = jsonResponse.optJSONArray("result") ?: JSONArray()
+                val responseCode = conn.responseCode
+                if (responseCode in 200..299) {
+                    val reader = BufferedReader(InputStreamReader(conn.inputStream))
+                    val response = reader.readText()
+                    reader.close()
 
-                var occ = _telemetry.value.occupied
-                var user = _telemetry.value.currentUser
-                var curt = _telemetry.value.curtains
-                var ac = _telemetry.value.acOn
-                var temp = _telemetry.value.temperature
-                var light = _telemetry.value.lightColor
-                var alert = _telemetry.value.lastAlert
+                    val jsonResponse = JSONObject(response)
+                    val resultArray = jsonResponse.optJSONArray("result") ?: JSONArray()
 
-                for (i in 0 until resultArray.length()) {
-                    val item = resultArray.getJSONObject(i)
-                    val variable = item.optString("variable")
-                    val value = item.opt("value")?.toString() ?: ""
-
-                    when (variable) {
-                        "presenca" -> occ = value == "1" || value.equals("true", ignoreCase = true)
-                        "usuario" -> user = value
-                        "cortina" -> curt = value
-                        "ar_condicionado" -> ac = value == "1" || value.equals("true", ignoreCase = true)
-                        "temperatura" -> temp = value.toFloatOrNull() ?: temp
-                        "luzes" -> light = value
-                        "alerta" -> alert = value
+                    if (resultArray.length() == 0) {
+                        val current = _telemetry.value.copy(isOnline = true)
+                        _telemetry.value = current
+                        return@withContext Result.success(current)
                     }
+
+                    var occ = _telemetry.value.occupied
+                    var user = _telemetry.value.currentUser
+                    var curt = _telemetry.value.curtains
+                    var ac = _telemetry.value.acOn
+                    var temp = _telemetry.value.temperature
+                    var light = _telemetry.value.lightColor
+                    var alert = _telemetry.value.lastAlert
+
+                    // Conjunto para capturar apenas a ocorrência mais recente (índice menor = mais novo)
+                    val seenVariables = mutableSetOf<String>()
+
+                    for (i in 0 until resultArray.length()) {
+                        val item = resultArray.getJSONObject(i)
+                        val variable = item.optString("variable")
+                        val value = item.opt("value")?.toString() ?: ""
+
+                        if (seenVariables.add(variable)) {
+                            when (variable) {
+                                "presenca" -> occ = (value == "1" || value.equals("true", ignoreCase = true))
+                                "usuario" -> user = value
+                                "cortina" -> curt = value
+                                "ar_condicionado" -> ac = (value == "1" || value.equals("true", ignoreCase = true))
+                                "temperatura" -> temp = value.toFloatOrNull() ?: temp
+                                "luzes" -> light = value
+                                "alerta" -> alert = value
+                            }
+                        }
+                    }
+
+                    val newTelemetry = RoomTelemetry(
+                        occupied = occ,
+                        currentUser = user,
+                        curtains = curt,
+                        acOn = ac,
+                        temperature = temp,
+                        lightColor = light,
+                        lastAlert = alert,
+                        timestamp = System.currentTimeMillis(),
+                        isOnline = true
+                    )
+
+                    saveLocalTelemetry(newTelemetry)
+                    Log.d(TAG, "Sincronização TagoIO bem sucedida via $endpoint: AC=$ac, Temp=$temp, User=$user")
+                    return@withContext Result.success(newTelemetry)
                 }
-
-                val newTelemetry = RoomTelemetry(
-                    occupied = occ,
-                    currentUser = user,
-                    curtains = curt,
-                    acOn = ac,
-                    temperature = temp,
-                    lightColor = light,
-                    lastAlert = alert,
-                    timestamp = System.currentTimeMillis(),
-                    isOnline = true
-                )
-
-                saveLocalTelemetry(newTelemetry)
-                Log.d(TAG, "Sincronização Nuvem TagoIO concluída com sucesso: $newTelemetry")
-                return@withContext Result.success(newTelemetry)
-            } else {
-                Log.w(TAG, "Erro na resposta TagoIO: $responseCode")
-                return@withContext Result.failure(Exception("HTTP $responseCode da TagoIO"))
+            } catch (e: Exception) {
+                Log.w(TAG, "Tentativa falhou para $endpoint: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Falha na comunicação com a nuvem TagoIO", e)
-            val offlineTelemetry = _telemetry.value.copy(isOnline = false)
-            _telemetry.value = offlineTelemetry
-            return@withContext Result.failure(e)
         }
+
+        val offlineTelemetry = _telemetry.value.copy(isOnline = false)
+        _telemetry.value = offlineTelemetry
+        Result.failure(Exception("Falha ao comunicar com os endpoints da TagoIO"))
     }
 
     /**
@@ -228,24 +246,30 @@ class TagoIoRoomGateway(context: Context) : RoomGateway {
         }.toString()
 
         if (token.isNotBlank()) {
-            try {
-                val url = URL("https://api.tago.io/data")
-                val conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.doOutput = true
-                conn.setRequestProperty("Device-Token", token)
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.connectTimeout = 7000
+            val endpoints = listOf("https://api.us-e1.tago.io/data", "https://api.tago.io/data")
+            for (endpoint in endpoints) {
+                try {
+                    val url = URL(endpoint)
+                    val conn = url.openConnection() as HttpURLConnection
+                    conn.requestMethod = "POST"
+                    conn.doOutput = true
+                    conn.setRequestProperty("Device-Token", token)
+                    conn.setRequestProperty("Content-Type", "application/json")
+                    conn.connectTimeout = 6000
 
-                val writer = OutputStreamWriter(conn.outputStream)
-                writer.write(jsonPayload)
-                writer.flush()
-                writer.close()
+                    val writer = OutputStreamWriter(conn.outputStream)
+                    writer.write(jsonPayload)
+                    writer.flush()
+                    writer.close()
 
-                val code = conn.responseCode
-                Log.d(TAG, "Comando enviado para TagoIO (HTTP $code): $jsonPayload")
-            } catch (e: Exception) {
-                Log.e(TAG, "Erro ao enviar comando para nuvem", e)
+                    val code = conn.responseCode
+                    if (code in 200..299) {
+                        Log.d(TAG, "Comando enviado para TagoIO (HTTP $code) via $endpoint")
+                        break
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Erro ao enviar comando para $endpoint", e)
+                }
             }
         }
 
@@ -272,24 +296,27 @@ class TagoIoRoomGateway(context: Context) : RoomGateway {
         }.toString()
 
         if (token.isNotBlank()) {
-            try {
-                val url = URL("https://api.tago.io/data")
-                val conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.doOutput = true
-                conn.setRequestProperty("Device-Token", token)
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.connectTimeout = 7000
+            val endpoints = listOf("https://api.us-e1.tago.io/data", "https://api.tago.io/data")
+            for (endpoint in endpoints) {
+                try {
+                    val url = URL(endpoint)
+                    val conn = url.openConnection() as HttpURLConnection
+                    conn.requestMethod = "POST"
+                    conn.doOutput = true
+                    conn.setRequestProperty("Device-Token", token)
+                    conn.setRequestProperty("Content-Type", "application/json")
+                    conn.connectTimeout = 6000
 
-                val writer = OutputStreamWriter(conn.outputStream)
-                writer.write(jsonPayload)
-                writer.flush()
-                writer.close()
+                    val writer = OutputStreamWriter(conn.outputStream)
+                    writer.write(jsonPayload)
+                    writer.flush()
+                    writer.close()
 
-                val code = conn.responseCode
-                Log.d(TAG, "Shutdown enviado para TagoIO (HTTP $code)")
-            } catch (e: Exception) {
-                Log.e(TAG, "Erro ao enviar shutdown para nuvem", e)
+                    val code = conn.responseCode
+                    if (code in 200..299) break
+                } catch (e: Exception) {
+                    Log.e(TAG, "Erro ao enviar shutdown", e)
+                }
             }
         }
 

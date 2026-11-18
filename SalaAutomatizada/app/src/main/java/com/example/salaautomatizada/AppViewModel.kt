@@ -12,6 +12,7 @@ import com.example.salaautomatizada.device.RoomGateway
 import com.example.salaautomatizada.device.RoomTelemetry
 import com.example.salaautomatizada.device.TagoIoRoomGateway
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -56,6 +57,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _message = MutableStateFlow<UiMessage?>(null)
     val message: StateFlow<UiMessage?> = _message.asStateFlow()
 
+    private var lastProcessedTelemetry: RoomTelemetry? = null
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val configs: StateFlow<List<RoomConfig>> = _email
         .flatMapLatest { e ->
@@ -68,8 +71,75 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     init {
-        // Tenta sincronizar com a nuvem na inicialização
-        refreshTelemetry(silent = true)
+        // Inicia polling periódico em segundo plano a cada 3 segundos
+        // para sincronizar em tempo real com os testes no Wokwi/TagoIO sem precisar clicar em recarregar
+        viewModelScope.launch {
+            while (true) {
+                if (gateway.getCloudToken().isNotBlank()) {
+                    gateway.syncFromCloud().onSuccess { t ->
+                        processTelemetryUpdate(t)
+                    }
+                }
+                delay(3000)
+            }
+        }
+    }
+
+    private suspend fun processTelemetryUpdate(t: RoomTelemetry) {
+        val prev = lastProcessedTelemetry
+        lastProcessedTelemetry = t
+
+        if (!t.isOnline) return
+
+        val recentLogs = db.eventLogDao().getRecent(1)
+        val isFirstTime = recentLogs.isEmpty()
+
+        val isNewEntry = (t.occupied && t.currentUser != "Nenhum" && (prev == null || !prev.occupied || prev.currentUser != t.currentUser))
+        val isExit = (!t.occupied && prev?.occupied == true)
+        val isAlert = (t.lastAlert.contains("Incorreta", ignoreCase = true) || t.lastAlert.contains("Invasao", ignoreCase = true)) &&
+                (prev == null || prev.lastAlert != t.lastAlert)
+
+        if (isNewEntry || (isFirstTime && t.occupied)) {
+            db.eventLogDao().insert(
+                RoomEventLog(
+                    eventType = "ENTRADA",
+                    userName = t.currentUser,
+                    description = "Usuário ${t.currentUser} acessou a sala via teclado. Ar Condicionado: ${if (t.acOn) "LIGADO" else "DESLIGADO"} (${t.temperature}°C). Cortina: ${t.curtains}.",
+                    temperature = t.temperature,
+                    acState = t.acOn
+                )
+            )
+        } else if (isExit) {
+            db.eventLogDao().insert(
+                RoomEventLog(
+                    eventType = "SAIDA",
+                    userName = prev?.currentUser ?: "Usuário",
+                    description = "Usuário saiu da sala. Cortina fechada e ar condicionado desligado.",
+                    temperature = t.temperature,
+                    acState = false
+                )
+            )
+        } else if (isAlert) {
+            db.eventLogDao().insert(
+                RoomEventLog(
+                    eventType = "ALERTA",
+                    userName = "Tentativa Negada",
+                    description = t.lastAlert,
+                    temperature = t.temperature,
+                    acState = t.acOn
+                )
+            )
+        } else if (isFirstTime) {
+            db.eventLogDao().insert(
+                RoomEventLog(
+                    eventType = "SISTEMA",
+                    userName = "Sistema",
+                    description = "Sala conectada à nuvem IoT TagoIO. Status: ${if (t.occupied) "Ocupada" else "Livre"}. Temperatura: ${t.temperature}°C.",
+                    temperature = t.temperature,
+                    acState = t.acOn
+                )
+            )
+        }
     }
 
     // ---------------------------------------------------------------- mensagens
@@ -95,7 +165,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             .digest(("sala::$password").toByteArray())
             .joinToString("") { "%02x".format(it) }
 
-    /** Retorna null em caso de sucesso, ou a mensagem de erro. */
     suspend fun login(email: String, password: String): String? {
         val e = email.trim().lowercase()
         val user = db.userDao().find(e) ?: return "Usuário não encontrado. Crie uma conta."
@@ -104,7 +173,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return null
     }
 
-    /** Retorna null em caso de sucesso, ou a mensagem de erro. */
     suspend fun register(email: String, password: String): String? {
         val e = email.trim().lowercase()
         if (db.userDao().find(e) != null) return "Este e-mail já está cadastrado."
@@ -117,7 +185,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val previous = prefs.getString("last_email", null)
         val editor = prefs.edit().putString("email", email).putString("last_email", email)
         if (previous != email) {
-            // Outro usuário assumiu o app: zera a sala ativa e o estado ligado.
             editor.putLong("active_id", -1L).putBoolean("powered", false)
             _activeId.value = -1L
             _powered.value = false
@@ -218,12 +285,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Sincroniza dados com a nuvem TagoIO. */
+    /** Sincroniza dados com a nuvem TagoIO sob demanda. */
     fun refreshTelemetry(silent: Boolean = false) {
         viewModelScope.launch {
             runBusy {
                 gateway.syncFromCloud()
                     .onSuccess { t ->
+                        processTelemetryUpdate(t)
                         if (!silent) {
                             if (t.isOnline) say("Dados da nuvem IoT atualizados!")
                             else say("Nuvem IoT offline. Exibindo telemetria local.")
