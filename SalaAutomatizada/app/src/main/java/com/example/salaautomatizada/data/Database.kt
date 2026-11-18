@@ -30,7 +30,8 @@ data class RoomConfig(
     val lightColor: Int,        // ARGB
     val curtainsOpen: Boolean,
     val acOn: Boolean,
-    val temperature: Int        // °C
+    val temperature: Int,       // °C
+    val roomPassword: String = "1234" // Senha de acesso digitada no teclado
 )
 
 /**
@@ -87,7 +88,7 @@ interface EventLogDao {
     suspend fun clearAll()
 }
 
-@Database(entities = [User::class, RoomConfig::class, RoomEventLog::class], version = 2, exportSchema = false)
+@Database(entities = [User::class, RoomConfig::class, RoomEventLog::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun userDao(): UserDao
     abstract fun configDao(): ConfigDao

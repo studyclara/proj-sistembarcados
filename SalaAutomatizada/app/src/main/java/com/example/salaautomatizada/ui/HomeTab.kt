@@ -362,7 +362,7 @@ private fun ConfigCard(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        config.roomType,
+                        "${config.roomType} • Senha: ${config.roomPassword}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

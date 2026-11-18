@@ -43,7 +43,7 @@ public final class ConfigDao_Impl implements ConfigDao {
       @Override
       @NonNull
       protected String createQuery() {
-        return "INSERT OR REPLACE INTO `room_configs` (`id`,`userEmail`,`name`,`roomType`,`lightsOn`,`brightness`,`lightColor`,`curtainsOpen`,`acOn`,`temperature`) VALUES (nullif(?, 0),?,?,?,?,?,?,?,?,?)";
+        return "INSERT OR REPLACE INTO `room_configs` (`id`,`userEmail`,`name`,`roomType`,`lightsOn`,`brightness`,`lightColor`,`curtainsOpen`,`acOn`,`temperature`,`roomPassword`) VALUES (nullif(?, 0),?,?,?,?,?,?,?,?,?,?)";
       }
 
       @Override
@@ -62,6 +62,7 @@ public final class ConfigDao_Impl implements ConfigDao {
         final int _tmp_2 = entity.getAcOn() ? 1 : 0;
         statement.bindLong(9, _tmp_2);
         statement.bindLong(10, entity.getTemperature());
+        statement.bindString(11, entity.getRoomPassword());
       }
     };
     this.__deletionAdapterOfRoomConfig = new EntityDeletionOrUpdateAdapter<RoomConfig>(__db) {
@@ -137,6 +138,7 @@ public final class ConfigDao_Impl implements ConfigDao {
           final int _cursorIndexOfCurtainsOpen = CursorUtil.getColumnIndexOrThrow(_cursor, "curtainsOpen");
           final int _cursorIndexOfAcOn = CursorUtil.getColumnIndexOrThrow(_cursor, "acOn");
           final int _cursorIndexOfTemperature = CursorUtil.getColumnIndexOrThrow(_cursor, "temperature");
+          final int _cursorIndexOfRoomPassword = CursorUtil.getColumnIndexOrThrow(_cursor, "roomPassword");
           final List<RoomConfig> _result = new ArrayList<RoomConfig>(_cursor.getCount());
           while (_cursor.moveToNext()) {
             final RoomConfig _item;
@@ -166,7 +168,9 @@ public final class ConfigDao_Impl implements ConfigDao {
             _tmpAcOn = _tmp_2 != 0;
             final int _tmpTemperature;
             _tmpTemperature = _cursor.getInt(_cursorIndexOfTemperature);
-            _item = new RoomConfig(_tmpId,_tmpUserEmail,_tmpName,_tmpRoomType,_tmpLightsOn,_tmpBrightness,_tmpLightColor,_tmpCurtainsOpen,_tmpAcOn,_tmpTemperature);
+            final String _tmpRoomPassword;
+            _tmpRoomPassword = _cursor.getString(_cursorIndexOfRoomPassword);
+            _item = new RoomConfig(_tmpId,_tmpUserEmail,_tmpName,_tmpRoomType,_tmpLightsOn,_tmpBrightness,_tmpLightColor,_tmpCurtainsOpen,_tmpAcOn,_tmpTemperature,_tmpRoomPassword);
             _result.add(_item);
           }
           return _result;
@@ -205,6 +209,7 @@ public final class ConfigDao_Impl implements ConfigDao {
           final int _cursorIndexOfCurtainsOpen = CursorUtil.getColumnIndexOrThrow(_cursor, "curtainsOpen");
           final int _cursorIndexOfAcOn = CursorUtil.getColumnIndexOrThrow(_cursor, "acOn");
           final int _cursorIndexOfTemperature = CursorUtil.getColumnIndexOrThrow(_cursor, "temperature");
+          final int _cursorIndexOfRoomPassword = CursorUtil.getColumnIndexOrThrow(_cursor, "roomPassword");
           final RoomConfig _result;
           if (_cursor.moveToFirst()) {
             final long _tmpId;
@@ -233,7 +238,9 @@ public final class ConfigDao_Impl implements ConfigDao {
             _tmpAcOn = _tmp_2 != 0;
             final int _tmpTemperature;
             _tmpTemperature = _cursor.getInt(_cursorIndexOfTemperature);
-            _result = new RoomConfig(_tmpId,_tmpUserEmail,_tmpName,_tmpRoomType,_tmpLightsOn,_tmpBrightness,_tmpLightColor,_tmpCurtainsOpen,_tmpAcOn,_tmpTemperature);
+            final String _tmpRoomPassword;
+            _tmpRoomPassword = _cursor.getString(_cursorIndexOfRoomPassword);
+            _result = new RoomConfig(_tmpId,_tmpUserEmail,_tmpName,_tmpRoomType,_tmpLightsOn,_tmpBrightness,_tmpLightColor,_tmpCurtainsOpen,_tmpAcOn,_tmpTemperature,_tmpRoomPassword);
           } else {
             _result = null;
           }
