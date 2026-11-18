@@ -6,9 +6,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.salaautomatizada.data.AppDatabase
 import com.example.salaautomatizada.data.RoomConfig
+import com.example.salaautomatizada.data.RoomEventLog
 import com.example.salaautomatizada.data.User
 import com.example.salaautomatizada.device.RoomGateway
-import com.example.salaautomatizada.device.SimulatedRoomGateway
+import com.example.salaautomatizada.device.RoomTelemetry
+import com.example.salaautomatizada.device.TagoIoRoomGateway
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -29,10 +31,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val db = AppDatabase.get(app)
     private val prefs = app.getSharedPreferences("sala_prefs", Context.MODE_PRIVATE)
 
-    // Troque por uma implementação real para falar com o microcontrolador.
-    private val gateway: RoomGateway = SimulatedRoomGateway(app)
+    // Gateway IoT conectado à nuvem TagoIO
+    val gateway: RoomGateway = TagoIoRoomGateway(app)
 
     val occupied: StateFlow<Boolean> = gateway.occupied
+    val telemetry: StateFlow<RoomTelemetry> = gateway.telemetry
+
+    val eventLogs: StateFlow<List<RoomEventLog>> = db.eventLogDao().observeAll()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _email = MutableStateFlow(prefs.getString("email", null))
     val email: StateFlow<String?> = _email.asStateFlow()
@@ -61,9 +67,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         list.firstOrNull { it.id == id }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    init {
+        // Tenta sincronizar com a nuvem na inicialização
+        refreshTelemetry(silent = true)
+    }
+
     // ---------------------------------------------------------------- mensagens
 
-    private fun say(text: String, blocking: Boolean = false) {
+    fun say(text: String, blocking: Boolean = false) {
         _message.value = UiMessage(text, blocking)
     }
 
@@ -142,9 +153,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Só existe na simulação: alterna a presença na sala (aciona por toque longo no selo Vazia/Ocupada da Home). */
+    /** Permite simular a presença para testes sem hardware. */
     fun setSimulatedPresence(value: Boolean) {
-        (gateway as? SimulatedRoomGateway)?.setOccupied(value)
+        (gateway as? TagoIoRoomGateway)?.setSimulatedPresence(value)
+        viewModelScope.launch {
+            db.eventLogDao().insert(
+                RoomEventLog(
+                    eventType = if (value) "ENTRADA" else "SAIDA",
+                    userName = if (value) "Aluno Simulado" else "Nenhum",
+                    description = if (value) "Presença simulada ativada na sala." else "Sala desocupada (simulado).",
+                    temperature = if (value) 22.0f else 26.5f,
+                    acState = value
+                )
+            )
+        }
     }
 
     /** Botão Liga/Desliga. Bloqueado se a sala estiver ocupada. */
@@ -160,6 +182,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     .onSuccess {
                         setPowered(false)
                         say("Sala desligada.")
+                        db.eventLogDao().insert(
+                            RoomEventLog(
+                                eventType = "SAIDA",
+                                userName = _email.value ?: "Usuário",
+                                description = "Sala desligada pelo aplicativo. Ar condicionado desligado.",
+                                temperature = 26.5f,
+                                acState = false
+                            )
+                        )
                     }
                     .onFailure { say("Não foi possível desligar a sala. Tente novamente.") }
             } else {
@@ -172,16 +203,54 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     .onSuccess {
                         setPowered(true)
                         say("Sala ligada com “${config.name}”.")
+                        db.eventLogDao().insert(
+                            RoomEventLog(
+                                eventType = "POWER",
+                                userName = _email.value ?: "Usuário",
+                                description = "Sala ligada com “${config.name}”. Ar Condicionado: ${if (config.acOn) "LIGADO" else "DESLIGADO"} (${config.temperature}°C).",
+                                temperature = config.temperature.toFloat(),
+                                acState = config.acOn
+                            )
+                        )
                     }
                     .onFailure { say("Não foi possível ligar a sala. Tente novamente.") }
             }
         }
     }
 
-    /**
-     * Toque em uma sala na Home: ela passa a ser a ativa e a anterior fica desativada.
-     * Com o sistema ligado, isso altera a sala de verdade, então exige sala vazia.
-     */
+    /** Sincroniza dados com a nuvem TagoIO. */
+    fun refreshTelemetry(silent: Boolean = false) {
+        viewModelScope.launch {
+            runBusy {
+                gateway.syncFromCloud()
+                    .onSuccess { t ->
+                        if (!silent) {
+                            if (t.isOnline) say("Dados da nuvem IoT atualizados!")
+                            else say("Nuvem IoT offline. Exibindo telemetria local.")
+                        }
+                    }
+                    .onFailure {
+                        if (!silent) say("Não foi possível sincronizar com a TagoIO. Verifique a conexão.")
+                    }
+            }
+        }
+    }
+
+    fun getCloudToken(): String = gateway.getCloudToken()
+
+    fun setCloudToken(token: String) {
+        gateway.setCloudToken(token)
+        say("Token salvo! Conectando à nuvem...")
+        refreshTelemetry(silent = false)
+    }
+
+    fun clearEventLogs() {
+        viewModelScope.launch {
+            db.eventLogDao().clearAll()
+            say("Relatórios limpos com sucesso.")
+        }
+    }
+
     fun selectConfig(id: Long) {
         if (id == _activeId.value || _busy.value) return
         viewModelScope.launch {

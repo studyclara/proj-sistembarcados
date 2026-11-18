@@ -37,6 +37,13 @@
       "top": 340,
       "left": 340,
       "attrs": {}
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_ac",
+      "top": 340,
+      "left": 180,
+      "attrs": { "color": "cyan", "label": "Ar Condicionado" }
     }
   ],
   "connections": [
@@ -50,10 +57,10 @@
     ["esp:D19", "keypad:R1", "black", []],
     ["esp:D18", "keypad:R2", "orange", []],
     ["esp:D5", "keypad:R3", "black", []],
-    ["esp:D17", "keypad:R4", "black", []],
-    ["esp:D16", "keypad:C1", "orange", []],
+    ["esp:TX2", "keypad:R4", "black", []],
+    ["esp:RX2", "keypad:C1", "orange", []],
     ["esp:D4", "keypad:C2", "orange", []],
-    ["esp:D0", "keypad:C3", "orange", []],
+    ["esp:D25", "keypad:C3", "orange", []],
     ["esp:D2", "keypad:C4", "orange", []],
 
     ["esp:D15", "strip:DIN", "green", []],
@@ -62,7 +69,10 @@
 
     ["esp:D13", "servo:PWM", "orange", []],
     ["esp:5V", "servo:V+", "red", []],
-    ["esp:GND.3", "servo:GND", "black", []]
+    ["esp:GND.3", "servo:GND", "black", []],
+
+    ["esp:D27", "led_ac:A", "blue", []],
+    ["esp:GND.1", "led_ac:C", "black", []]
   ],
   "dependencies": {}
 }

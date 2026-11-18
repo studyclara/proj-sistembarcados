@@ -1,5 +1,6 @@
 package com.example.salaautomatizada.ui
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -9,8 +10,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Assessment
+import androidx.compose.material.icons.rounded.MeetingRoom
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PowerSettingsNew
+import androidx.compose.material.icons.rounded.Sensors
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -18,6 +22,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -28,12 +35,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.salaautomatizada.AppViewModel
 
-/** Tela principal: lista de salas + botão Liga/Desliga fixo na parte inferior. */
+/** Tela principal com abas: Salas, Monitoramento IoT e Relatórios. */
 @Composable
 fun MainScreen(
     vm: AppViewModel,
@@ -45,6 +55,9 @@ fun MainScreen(
     val message by vm.message.collectAsState()
     val email by vm.email.collectAsState()
 
+    var currentTab by remember { mutableIntStateOf(0) } // 0: Salas, 1: Monitoramento, 2: Relatórios
+    var showCloudConfigDialog by remember { mutableStateOf(false) }
+
     // Avisos comuns viram snackbar.
     LaunchedEffect(message) {
         val m = message
@@ -54,7 +67,7 @@ fun MainScreen(
         }
     }
 
-    // Aviso de sala ocupada vira diálogo, para não passar despercebido.
+    // Aviso de sala ocupada vira diálogo.
     message?.takeIf { it.blocking }?.let { m ->
         AlertDialog(
             onDismissRequest = { vm.consumeMessage(m) },
@@ -70,21 +83,110 @@ fun MainScreen(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = { PowerBar(vm) },
+        bottomBar = {
+            Column {
+                if (currentTab == 0) {
+                    PowerBar(vm)
+                }
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 4.dp
+                ) {
+                    NavigationBarItem(
+                        selected = currentTab == 0,
+                        onClick = { currentTab = 0 },
+                        icon = { Icon(Icons.Rounded.MeetingRoom, contentDescription = "Salas") },
+                        label = { Text("Salas") }
+                    )
+                    NavigationBarItem(
+                        selected = currentTab == 1,
+                        onClick = { currentTab = 1 },
+                        icon = { Icon(Icons.Rounded.Sensors, contentDescription = "Monitoramento") },
+                        label = { Text("Monitoramento") }
+                    )
+                    NavigationBarItem(
+                        selected = currentTab == 2,
+                        onClick = { currentTab = 2 },
+                        icon = { Icon(Icons.Rounded.Assessment, contentDescription = "Relatórios") },
+                        label = { Text("Relatórios") }
+                    )
+                }
+            }
+        },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onNew,
-                icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                text = { Text("Nova configuração") }
-            )
+            if (currentTab == 0) {
+                ExtendedFloatingActionButton(
+                    onClick = onNew,
+                    icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
+                    text = { Text("Nova configuração") }
+                )
+            }
         }
     ) { padding ->
-        HomeTab(
-            vm = vm,
-            padding = padding,
-            email = email,
-            onEdit = onEdit,
-            onLogout = onLogout
+        when (currentTab) {
+            0 -> HomeTab(
+                vm = vm,
+                padding = padding,
+                email = email,
+                onEdit = onEdit,
+                onLogout = onLogout
+            )
+            1 -> MonitoringTab(
+                vm = vm,
+                padding = padding,
+                onOpenCloudConfig = { showCloudConfigDialog = true }
+            )
+            2 -> ReportsTab(
+                vm = vm,
+                padding = padding
+            )
+        }
+    }
+
+    if (showCloudConfigDialog) {
+        var tokenInput by remember { mutableStateOf(vm.getCloudToken()) }
+
+        AlertDialog(
+            onDismissRequest = { showCloudConfigDialog = false },
+            title = { Text("Configurar Nuvem TagoIO") },
+            text = {
+                Column {
+                    Text(
+                        "Insira o Device Token gerado no seu dispositivo na plataforma TagoIO (ou deixe vazio para demonstração local):",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    OutlinedTextField(
+                        value = tokenInput,
+                        onValueChange = { tokenInput = it },
+                        label = { Text("Device Token (TagoIO)") },
+                        singleLine = true,
+                        placeholder = { Text("Ex: 12345678-abcd-ef01-2345-6789abcdef01") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "O token conecta o app diretamente aos dados do ESP32 na nuvem TagoIO.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        vm.setCloudToken(tokenInput)
+                        showCloudConfigDialog = false
+                    }
+                ) {
+                    Text("Salvar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCloudConfigDialog = false }) {
+                    Text("Cancelar")
+                }
+            }
         )
     }
 }
@@ -113,9 +215,8 @@ private fun PowerBar(vm: AppViewModel) {
             },
             modifier = Modifier
                 .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 12.dp)
-                .height(56.dp)
+                .padding(horizontal = 20.dp, vertical = 10.dp)
+                .height(52.dp)
         ) {
             if (busy) {
                 CircularProgressIndicator(

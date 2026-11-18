@@ -1,0 +1,22 @@
+[
+    {
+        "merged": "com.example.salaautomatizada.app-debug-57:/drawable_ic_launcher_monochrome.xml.flat",
+        "source": "com.example.salaautomatizada.app-main-59:/drawable/ic_launcher_monochrome.xml"
+    },
+    {
+        "merged": "com.example.salaautomatizada.app-debug-57:/mipmap-anydpi_ic_launcher.xml.flat",
+        "source": "com.example.salaautomatizada.app-main-59:/mipmap-anydpi/ic_launcher.xml"
+    },
+    {
+        "merged": "com.example.salaautomatizada.app-debug-57:/mipmap-anydpi_ic_launcher_round.xml.flat",
+        "source": "com.example.salaautomatizada.app-main-59:/mipmap-anydpi/ic_launcher_round.xml"
+    },
+    {
+        "merged": "com.example.salaautomatizada.app-debug-57:/drawable_ic_launcher_background.xml.flat",
+        "source": "com.example.salaautomatizada.app-main-59:/drawable/ic_launcher_background.xml"
+    },
+    {
+        "merged": "com.example.salaautomatizada.app-debug-57:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "com.example.salaautomatizada.app-main-59:/drawable/ic_launcher_foreground.xml"
+    }
+]
