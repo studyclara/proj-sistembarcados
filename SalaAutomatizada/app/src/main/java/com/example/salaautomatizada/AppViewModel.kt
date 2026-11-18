@@ -336,7 +336,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     .onFailure { say("Não foi possível aplicar “${config.name}” na sala.") }
             } else {
                 setActive(id)
-                say("“${config.name}” selecionada. Ligue o sistema para ativá-la.")
+                gateway.syncPassword(config.roomPassword)
+                say("“${config.name}” selecionada (Senha: ${config.roomPassword}).")
             }
         }
     }
@@ -360,11 +361,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         )
                     } else {
                         gateway.apply(saved)
-                            .onSuccess { say("Configuração salva e aplicada na sala.") }
+                            .onSuccess { say("Configuração salva e sincronizada com a nuvem.") }
                             .onFailure { say("Configuração salva, mas não foi possível aplicá-la na sala.") }
                     }
                 }
-                else -> say("Configuração salva.")
+                else -> {
+                    gateway.syncPassword(saved.roomPassword)
+                    say("Configuração salva e senha enviada para a nuvem.")
+                }
             }
             onDone()
         }

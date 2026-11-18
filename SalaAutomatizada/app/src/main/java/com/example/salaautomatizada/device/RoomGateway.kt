@@ -50,6 +50,9 @@ interface RoomGateway {
     /** Sincroniza os dados mais recentes diretamente da plataforma IoT. */
     suspend fun syncFromCloud(): Result<RoomTelemetry>
 
+    /** Sincroniza apenas a senha da sala com a nuvem sem ligar o sistema. */
+    suspend fun syncPassword(password: String): Result<Unit>
+
     /** Obtém o token configurado da nuvem. */
     fun getCloudToken(): String
 
@@ -61,6 +64,7 @@ interface RoomGateway {
 fun RoomConfig.toDeviceJson(): String = JSONObject()
     .put("power", true)
     .put("room_type", roomType)
+    .put("password", roomPassword)
     .put(
         "lights",
         JSONObject()
@@ -242,6 +246,7 @@ class TagoIoRoomGateway(context: Context) : RoomGateway {
             put(JSONObject().put("variable", "temperatura").put("value", config.temperature))
             put(JSONObject().put("variable", "cortina").put("value", if (config.curtainsOpen) "Aberta" else "Fechada"))
             put(JSONObject().put("variable", "luzes").put("value", "#%06X".format(config.lightColor and 0xFFFFFF)))
+            put(JSONObject().put("variable", "senha_sala").put("value", config.roomPassword))
             put(JSONObject().put("variable", "alerta").put("value", "Configuração aplicada via App: ${config.name}"))
         }.toString()
 
@@ -326,6 +331,43 @@ class TagoIoRoomGateway(context: Context) : RoomGateway {
             lastAlert = "Sala Desligada"
         )
         saveLocalTelemetry(updated)
+        Result.success(Unit)
+    }
+
+    /**
+     * Envia apenas a senha da sala para a nuvem sem alterar o estado de ligado/desligado.
+     */
+    override suspend fun syncPassword(password: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val token = getCloudToken()
+        if (token.isBlank() || password.isBlank()) return@withContext Result.success(Unit)
+
+        val jsonPayload = JSONArray().apply {
+            put(JSONObject().put("variable", "senha_sala").put("value", password))
+            put(JSONObject().put("variable", "alerta").put("value", "Senha sincronizada via App"))
+        }.toString()
+
+        val endpoints = listOf("https://api.us-e1.tago.io/data", "https://api.tago.io/data")
+        for (endpoint in endpoints) {
+            try {
+                val url = URL(endpoint)
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.setRequestProperty("Device-Token", token)
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.connectTimeout = 6000
+
+                val writer = OutputStreamWriter(conn.outputStream)
+                writer.write(jsonPayload)
+                writer.flush()
+                writer.close()
+
+                val code = conn.responseCode
+                if (code in 200..299) break
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro ao enviar senha para nuvem via $endpoint", e)
+            }
+        }
         Result.success(Unit)
     }
 

@@ -20,8 +20,6 @@
 #define TFT_RST 22
 #define TFT_SCK 18
 #define TFT_MOSI 23
-// NOTA: O display ILI9341 é apenas escrita, então MISO não é conectado ao SPI,
-// liberando o GPIO 19 para a Linha 1 do teclado (teclas 1, 2, 3, A) sem conflitos!
 
 // --- CONFIGURAÇÃO WI-FI E NUVEM IOT (TagoIO) ---
 const char* WIFI_SSID = "Wokwi-GUEST";
@@ -56,7 +54,7 @@ struct Usuario {
   uint32_t corHex;
 };
 
-// --- CADASTRO DOS 4 USUÁRIOS ---
+// --- CADASTRO DOS 4 USUÁRIOS PADRÃO ---
 Usuario usuarios[] = {
     {"1234", "Joao", "Azul", strip.Color(0, 0, 255)},
     {"A1B2", "Maria", "Verde", strip.Color(0, 255, 0)},
@@ -73,11 +71,18 @@ int tentativasErradas = 0;
 String usuarioAtual = "Nenhum";
 String corAtual = "Apagado";
 
+// Variáveis de controle remoto bidirecional da Nuvem/App Mobile
+String senhaSalaNuvem = "";
+int ultimoComandoPower = -1; // -1 = inicial, 0 = desligado, 1 = ligado
+unsigned long ultimaConsultaNuvem = 0;
+
 // Protótipos das funções
 void prepararTeclado();
 void prepararTela();
 void conectarWiFi();
 void enviarTelemetriaNuvem(const char* alerta = "Normal");
+void buscarConfiguracaoNuvem();
+void aplicarComandoRemotoApp(bool ligar, int cmdAC, float cmdTemp, String cmdCortina, String cmdLuzes);
 void exibirMensagemPadrao();
 void atualizarDisplayDigitos();
 void verificarSenha();
@@ -87,7 +92,6 @@ void fazerLogoff();
 
 void prepararTela() {
   SPI.end();
-  // Passamos -1 no MISO para o SPI nunca roubar o GPIO 19 da Linha 1 do teclado!
   SPI.begin(TFT_SCK, -1, TFT_MOSI, -1);
   pinMode(TFT_CS, OUTPUT);
   digitalWrite(TFT_CS, HIGH);
@@ -98,10 +102,9 @@ void prepararTela() {
 
 void prepararTeclado() {
   SPI.end();
-  // Restaura os pinos compartilhados para modo GPIO puro
-  gpio_reset_pin((gpio_num_t)19); // R1 (teclas 1, 2, 3, A)
-  gpio_reset_pin((gpio_num_t)18); // R2 (teclas 4, 5, 6, B)
-  gpio_reset_pin((gpio_num_t)25); // C3 (teclas 3, 6, 9, #)
+  gpio_reset_pin((gpio_num_t)19);
+  gpio_reset_pin((gpio_num_t)18);
+  gpio_reset_pin((gpio_num_t)25);
 
   for (byte i = 0; i < ROWS; i++) {
     pinMode(rowPins[i], OUTPUT);
@@ -134,6 +137,184 @@ void conectarWiFi() {
   }
 }
 
+/**
+ * Consulta a nuvem TagoIO para sincronizar comandos remotos enviados pelo App Mobile
+ * (Ligar sala, Desligar sala, Acionar Ar Condicionado, Mudar Senha, Abrir Cortina).
+ */
+void buscarConfiguracaoNuvem() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (String(TAGO_DEVICE_TOKEN).indexOf("INSIRA_SEU") >= 0) return;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient https;
+
+  const char* endpoints[] = {
+    "https://api.us-e1.tago.io/data?qty=15",
+    "https://api.tago.io/data?qty=15"
+  };
+
+  for (int ep = 0; ep < 2; ep++) {
+    if (https.begin(client, endpoints[ep])) {
+      https.addHeader("Device-Token", TAGO_DEVICE_TOKEN);
+      int httpCode = https.GET();
+
+      if (httpCode == 200) {
+        String payload = https.getString();
+        DynamicJsonDocument doc(4096);
+        DeserializationError err = deserializeJson(doc, payload);
+
+        if (!err) {
+          JsonArray array = doc["result"];
+          
+          int cmdPower = -1;
+          int cmdAC = -1;
+          float cmdTemp = -1;
+          String cmdCortina = "";
+          String cmdLuzes = "";
+          String cmdSenha = "";
+
+          // Percorre as variáveis retornadas (do mais recente para o mais antigo)
+          for (JsonObject item : array) {
+            String variable = item["variable"].as<String>();
+            String value = item["value"].as<String>();
+
+            if (variable == "comando_power" && cmdPower == -1) {
+              cmdPower = value.toInt();
+            } else if (variable == "ar_condicionado" && cmdAC == -1) {
+              cmdAC = value.toInt();
+            } else if (variable == "temperatura" && cmdTemp == -1) {
+              cmdTemp = value.toFloat();
+            } else if (variable == "cortina" && cmdCortina == "") {
+              cmdCortina = value;
+            } else if (variable == "luzes" && cmdLuzes == "") {
+              cmdLuzes = value;
+            } else if (variable == "senha_sala" && cmdSenha == "") {
+              cmdSenha = value;
+            }
+          }
+
+          // Sincroniza a senha configurada no App
+          if (cmdSenha.length() > 0 && senhaSalaNuvem != cmdSenha) {
+            senhaSalaNuvem = cmdSenha;
+            Serial.print("[IoT] Nova senha ativa recebida do App: ");
+            Serial.println(senhaSalaNuvem);
+          }
+
+          // Executa comandos remotos de Ligar/Desligar enviados pelo App
+          if (cmdPower == 1) {
+            if (!usuarioLogado) {
+              Serial.println("\n[IoT] >>> COMANDO RECEBIDO DO APP: LIGAR SALA! <<<");
+              aplicarComandoRemotoApp(true, cmdAC, cmdTemp, cmdCortina, cmdLuzes);
+            } else if (usuarioAtual == "App Mobile") {
+              // Ajustes em tempo real
+              if (cmdAC != -1 && (arCondicionadoLigado != (cmdAC == 1))) {
+                arCondicionadoLigado = (cmdAC == 1);
+                digitalWrite(AC_LED_PIN, arCondicionadoLigado ? HIGH : LOW);
+              }
+              if (cmdTemp > 10.0 && abs(temperaturaAtual - cmdTemp) > 0.1) {
+                temperaturaAtual = cmdTemp;
+              }
+            }
+          } else if (cmdPower == 0 && usuarioLogado) {
+            Serial.println("\n[IoT] >>> COMANDO RECEBIDO DO APP: DESLIGAR SALA! <<<");
+            aplicarComandoRemotoApp(false, 0, 27.0, "Fechada", "");
+          }
+
+          https.end();
+          break; // Sucesso, não precisa tentar o endpoint secundário
+        } else {
+          Serial.print("[IoT] Erro ao deserializar JSON da nuvem: ");
+          Serial.println(err.c_str());
+        }
+      }
+      https.end();
+    }
+  }
+}
+
+/**
+ * Aplica fisicamente no hardware os comandos remotos enviados pelo App Mobile.
+ */
+void aplicarComandoRemotoApp(bool ligar, int cmdAC, float cmdTemp, String cmdCortina, String cmdLuzes) {
+  if (ligar) {
+    usuarioLogado = true;
+    usuarioAtual = "App Mobile";
+    tentativasErradas = 0;
+
+    // Ar Condicionado (LED AC pino 27)
+    arCondicionadoLigado = (cmdAC == 1);
+    digitalWrite(AC_LED_PIN, arCondicionadoLigado ? HIGH : LOW);
+    if (cmdTemp > 10.0) temperaturaAtual = cmdTemp;
+
+    // Cortina (Servo motor pino 13)
+    if (cmdCortina.equalsIgnoreCase("Aberta") || cmdCortina.equalsIgnoreCase("open")) {
+      cortina.write(90);
+    } else {
+      cortina.write(0);
+    }
+
+    // Luzes NeoPixel
+    uint32_t cor = strip.Color(0, 200, 255); // Ciano padrão
+    if (cmdLuzes.length() >= 6) {
+      String hex = cmdLuzes;
+      if (hex.startsWith("#")) hex = hex.substring(1);
+      long num = strtol(hex.c_str(), NULL, 16);
+      cor = strip.Color((num >> 16) & 0xFF, (num >> 8) & 0xFF, num & 0xFF);
+    }
+    for (int i = 0; i < NUMPIXELS; i++) {
+      strip.setPixelColor(i, cor);
+    }
+    strip.show();
+
+    // Atualiza a tela LCD TFT
+    prepararTela();
+    tft.fillScreen(ILI9341_BLACK);
+    tft.setTextColor(ILI9341_GREEN, ILI9341_BLACK);
+    tft.setTextSize(2);
+    tft.setCursor(10, 20);
+    tft.println("SALA ATIVA (APP)!");
+
+    tft.setTextColor(ILI9341_CYAN, ILI9341_BLACK);
+    tft.setTextSize(2);
+    tft.setCursor(10, 60);
+    tft.print("Ar Cond: ");
+    tft.println(arCondicionadoLigado ? "LIGADO" : "DESLIGADO");
+
+    tft.setTextSize(1);
+    tft.setCursor(10, 95);
+    tft.print("Temperatura: ");
+    tft.print(temperaturaAtual, 1);
+    tft.println(" C");
+
+    tft.setTextColor(ILI9341_WHITE, ILI9341_BLACK);
+    tft.setTextSize(2);
+    tft.setCursor(10, 130);
+    tft.print("Cortina: ");
+    tft.println(cmdCortina.length() > 0 ? cmdCortina : "Aberta");
+
+    tft.setTextSize(1);
+    tft.setCursor(10, 175);
+    tft.println("Acionamento remoto via App");
+    tft.setCursor(10, 200);
+    tft.println("Pressione * no teclado p/ sair");
+
+    prepararTeclado();
+  } else {
+    usuarioLogado = false;
+    usuarioAtual = "Nenhum";
+    arCondicionadoLigado = false;
+    digitalWrite(AC_LED_PIN, LOW);
+    temperaturaAtual = 27.0;
+
+    cortina.write(0);
+    strip.clear();
+    strip.show();
+
+    exibirMensagemPadrao();
+  }
+}
+
 void enviarTelemetriaNuvem(const char* alerta) {
   if (WiFi.status() != WL_CONNECTED) {
     WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -155,8 +336,12 @@ void enviarTelemetriaNuvem(const char* alerta) {
     https.addHeader("Content-Type", "application/json");
     https.addHeader("Device-Token", TAGO_DEVICE_TOKEN);
 
-    StaticJsonDocument<512> doc;
+    StaticJsonDocument<768> doc;
     JsonArray array = doc.to<JsonArray>();
+
+    JsonObject cp = array.createNestedObject();
+    cp["variable"] = "comando_power";
+    cp["value"] = usuarioLogado ? 1 : 0;
 
     JsonObject p = array.createNestedObject();
     p["variable"] = "presenca";
@@ -232,9 +417,18 @@ void setup() {
 
   conectarWiFi();
   enviarTelemetriaNuvem("Sistema Inicializado");
+
+  // Consulta a nuvem logo na inicialização
+  buscarConfiguracaoNuvem();
 }
 
 void loop() {
+  // A cada 3 segundos consulta comandos do aplicativo na nuvem
+  if (millis() - ultimaConsultaNuvem > 3000) {
+    ultimaConsultaNuvem = millis();
+    buscarConfiguracaoNuvem();
+  }
+
   char key = keypad.getKey();
 
   if (key) {
@@ -292,7 +486,6 @@ void exibirMensagemPadrao() {
   tft.print("Wi-Fi: ");
   tft.print(WiFi.status() == WL_CONNECTED ? "Online" : "Desconectado");
 
-  // Devolve imediatamente os pinos para o teclado
   prepararTeclado();
 }
 
@@ -307,28 +500,39 @@ void atualizarDisplayDigitos() {
     tft.print('*');
   }
 
-  // Devolve imediatamente os pinos para o teclado
   prepararTeclado();
 }
 
 void verificarSenha() {
-  bool acessoConcedido = false;
-
+  // 1. Verifica os 4 usuários padrão
   for (int i = 0; i < totalUsuarios; i++) {
-    if (senhaDigitada == usuarios[i].senha) {
-      acessoConcedido = true;
+    if (senhaDigitada.equalsIgnoreCase(usuarios[i].senha)) {
       sucessoAcesso(usuarios[i]);
-      break;
+      return;
     }
   }
 
-  if (!acessoConcedido) {
-    erroAcesso();
+  // 2. Verifica a senha da nova sala cadastrada no App Mobile!
+  if (senhaSalaNuvem.length() > 0 && senhaDigitada.equalsIgnoreCase(senhaSalaNuvem)) {
+    Usuario userApp = {senhaSalaNuvem, "Usuario App", "Ciano", strip.Color(0, 255, 255)};
+    sucessoAcesso(userApp);
+    return;
   }
+
+  // 3. Se ainda não bateu, tenta buscar na nuvem agora
+  buscarConfiguracaoNuvem();
+  if (senhaSalaNuvem.length() > 0 && senhaDigitada.equalsIgnoreCase(senhaSalaNuvem)) {
+    Usuario userApp = {senhaSalaNuvem, "Usuario App", "Ciano", strip.Color(0, 255, 255)};
+    sucessoAcesso(userApp);
+    return;
+  }
+
+  erroAcesso();
 }
 
 void sucessoAcesso(Usuario user) {
   usuarioLogado = true;
+  ultimoComandoPower = 1;
   tentativasErradas = 0;
   usuarioAtual = user.nome;
   corAtual = user.nomeCor;
@@ -422,6 +626,7 @@ void erroAcesso() {
 
 void fazerLogoff() {
   usuarioLogado = false;
+  ultimoComandoPower = 0;
   usuarioAtual = "Nenhum";
   corAtual = "Apagado";
 

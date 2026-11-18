@@ -26,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.rounded.AcUnit
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Lightbulb
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.NightsStay
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.Button
@@ -84,6 +85,8 @@ fun ConfigScreen(vm: AppViewModel, configId: Long, onBack: () -> Unit) {
     var curtainsOpen by remember { mutableStateOf(true) }
     var acOn by remember { mutableStateOf(false) }
     var temperature by remember { mutableFloatStateOf(23f) }
+    var roomPassword by remember { mutableStateOf("1234") }
+    var passwordError by remember { mutableStateOf(false) }
 
     // Modo edição: carrega a configuração existente.
     LaunchedEffect(configId) {
@@ -97,6 +100,7 @@ fun ConfigScreen(vm: AppViewModel, configId: Long, onBack: () -> Unit) {
                 curtainsOpen = c.curtainsOpen
                 acOn = c.acOn
                 temperature = c.temperature.toFloat()
+                roomPassword = c.roomPassword
             }
         }
     }
@@ -122,6 +126,8 @@ fun ConfigScreen(vm: AppViewModel, configId: Long, onBack: () -> Unit) {
                     onClick = {
                         if (name.isBlank()) {
                             nameError = true
+                        } else if (roomPassword.isBlank()) {
+                            passwordError = true
                         } else {
                             vm.save(
                                 RoomConfig(
@@ -134,7 +140,8 @@ fun ConfigScreen(vm: AppViewModel, configId: Long, onBack: () -> Unit) {
                                     lightColor = color,
                                     curtainsOpen = curtainsOpen,
                                     acOn = acOn,
-                                    temperature = temperature.roundToInt()
+                                    temperature = temperature.roundToInt(),
+                                    roomPassword = roomPassword.trim()
                                 ),
                                 onDone = onBack
                             )
@@ -176,6 +183,26 @@ fun ConfigScreen(vm: AppViewModel, configId: Long, onBack: () -> Unit) {
                         isError = nameError,
                         shape = MaterialTheme.shapes.medium,
                         supportingText = { if (nameError) Text("Informe um nome para salvar.") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = roomPassword,
+                        onValueChange = {
+                            if (it.length <= 8) {
+                                roomPassword = it.uppercase()
+                                passwordError = false
+                            }
+                        },
+                        label = { Text("Senha de acesso (Teclado físico)") },
+                        placeholder = { Text("Ex: 1234 ou A1B2") },
+                        leadingIcon = { Icon(Icons.Rounded.Lock, contentDescription = null) },
+                        singleLine = true,
+                        isError = passwordError,
+                        shape = MaterialTheme.shapes.medium,
+                        supportingText = {
+                            if (passwordError) Text("Informe a senha de acesso da sala.")
+                            else Text("Senha digitada no teclado para abrir a sala")
+                        },
                         modifier = Modifier.fillMaxWidth()
                     )
                     Text(
