@@ -3,35 +3,61 @@ package com.example.salaautomatizada.device
 import android.content.Context
 import android.util.Log
 import com.example.salaautomatizada.data.RoomConfig
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
- * Ponte entre o app e o microcontrolador da sala.
- *
- * Hoje o app usa [SimulatedRoomGateway] (nada é enviado de verdade). Para integrar o
- * hardware real, crie outra classe que implemente esta interface e troque a linha
- * `private val gateway: RoomGateway = ...` em AppViewModel.kt. Exemplos de transporte:
- *  - HTTP para um ESP32 na rede local (ex.: POST http://<ip>/config com [toDeviceJson]);
- *  - MQTT (publicar em um tópico e assinar o tópico do sensor de presença);
- *  - Bluetooth Low Energy.
- * Se usar rede, lembre de adicionar a permissão INTERNET no AndroidManifest.xml.
+ * Modelo de dados de telemetria recebido em tempo real da plataforma IoT (TagoIO / ESP32).
+ */
+data class RoomTelemetry(
+    val occupied: Boolean = false,
+    val currentUser: String = "Nenhum",
+    val curtains: String = "Fechada",
+    val acOn: Boolean = false,
+    val temperature: Float = 24.0f,
+    val lightColor: String = "Desligado",
+    val lastAlert: String = "Sistema Normal",
+    val timestamp: Long = System.currentTimeMillis(),
+    val isOnline: Boolean = false
+)
+
+/**
+ * Ponte entre o aplicativo mobile e o microcontrolador ESP32 através da Plataforma IoT na Nuvem.
  */
 interface RoomGateway {
-    /** `true` quando o sensor de presença indica que há alguém na sala. */
+    /** `true` quando há alguém presente na sala. */
     val occupied: StateFlow<Boolean>
 
-    /** Liga a automação da sala e aplica os ajustes da configuração. */
+    /** Telemetria completa em tempo real da sala na nuvem. */
+    val telemetry: StateFlow<RoomTelemetry>
+
+    /** Liga a automação da sala e envia a configuração para a nuvem/ESP32. */
     suspend fun apply(config: RoomConfig): Result<Unit>
 
     /** Desliga a automação da sala. */
     suspend fun shutdown(): Result<Unit>
+
+    /** Sincroniza os dados mais recentes diretamente da plataforma IoT. */
+    suspend fun syncFromCloud(): Result<RoomTelemetry>
+
+    /** Obtém o token configurado da nuvem. */
+    fun getCloudToken(): String
+
+    /** Atualiza o token do dispositivo na nuvem IoT. */
+    fun setCloudToken(token: String)
 }
 
-/** Formato JSON sugerido para enviar os ajustes ao microcontrolador. */
+/** Formato JSON para envio aos tópicos/variáveis da nuvem. */
 fun RoomConfig.toDeviceJson(): String = JSONObject()
     .put("power", true)
     .put("room_type", roomType)
@@ -47,36 +73,236 @@ fun RoomConfig.toDeviceJson(): String = JSONObject()
     .toString()
 
 /**
- * Versão de demonstração: espera um pouco (como se falasse com o hardware), registra o
- * JSON no Logcat (tag "RoomGateway") e deixa a presença ser alterada pela tela Liga/Desliga.
+ * Implementação do Gateway IoT conectado à nuvem TagoIO através de API REST / HTTPS.
+ * Sincroniza em tempo real com o ESP32 (físico ou simulado no Wokwi).
  */
-class SimulatedRoomGateway(context: Context) : RoomGateway {
+class TagoIoRoomGateway(context: Context) : RoomGateway {
 
     private val prefs = context.applicationContext
-        .getSharedPreferences("sala_gateway", Context.MODE_PRIVATE)
+        .getSharedPreferences("sala_tago_prefs", Context.MODE_PRIVATE)
+
+    private val _telemetry = MutableStateFlow(
+        RoomTelemetry(
+            occupied = prefs.getBoolean("occupied", false),
+            currentUser = prefs.getString("currentUser", "Nenhum") ?: "Nenhum",
+            curtains = prefs.getString("curtains", "Fechada") ?: "Fechada",
+            acOn = prefs.getBoolean("acOn", false),
+            temperature = prefs.getFloat("temperature", 24.5f),
+            lightColor = prefs.getString("lightColor", "Desligado") ?: "Desligado",
+            lastAlert = prefs.getString("lastAlert", "Sistema Pronto") ?: "Sistema Pronto",
+            isOnline = false
+        )
+    )
+    override val telemetry: StateFlow<RoomTelemetry> = _telemetry.asStateFlow()
 
     private val _occupied = MutableStateFlow(prefs.getBoolean("occupied", false))
     override val occupied: StateFlow<Boolean> = _occupied.asStateFlow()
 
-    /** Só existe na simulação: no hardware real quem decide é o sensor. */
-    fun setOccupied(value: Boolean) {
-        prefs.edit().putBoolean("occupied", value).apply()
+    override fun getCloudToken(): String {
+        return prefs.getString("tago_token", "") ?: ""
+    }
+
+    override fun setCloudToken(token: String) {
+        prefs.edit().putString("tago_token", token.trim()).apply()
+    }
+
+    /** Permite simular presença local caso esteja sem internet ou demonstrando sem hardware. */
+    fun setSimulatedPresence(value: Boolean) {
         _occupied.value = value
+        val updated = _telemetry.value.copy(
+            occupied = value,
+            currentUser = if (value) "Aluno (Simulado)" else "Nenhum",
+            acOn = value,
+            curtains = if (value) "Aberta" else "Fechada",
+            temperature = if (value) 22.0f else 26.5f
+        )
+        saveLocalTelemetry(updated)
     }
 
-    override suspend fun apply(config: RoomConfig): Result<Unit> {
-        delay(800)
-        Log.d(TAG, "apply -> ${config.toDeviceJson()}")
-        return Result.success(Unit)
+    private fun saveLocalTelemetry(t: RoomTelemetry) {
+        prefs.edit()
+            .putBoolean("occupied", t.occupied)
+            .putString("currentUser", t.currentUser)
+            .putString("curtains", t.curtains)
+            .putBoolean("acOn", t.acOn)
+            .putFloat("temperature", t.temperature)
+            .putString("lightColor", t.lightColor)
+            .putString("lastAlert", t.lastAlert)
+            .apply()
+        _telemetry.value = t
+        _occupied.value = t.occupied
     }
 
-    override suspend fun shutdown(): Result<Unit> {
-        delay(600)
-        Log.d(TAG, "shutdown -> {\"power\":false}")
-        return Result.success(Unit)
+    /**
+     * Consulta a API do TagoIO (GET https://api.tago.io/data?query=last_value)
+     * e atualiza o estado da sala no app.
+     */
+    override suspend fun syncFromCloud(): Result<RoomTelemetry> = withContext(Dispatchers.IO) {
+        val token = getCloudToken()
+        if (token.isBlank()) {
+            Log.d(TAG, "Token TagoIO não configurado. Utilizando telemetria em cache.")
+            return@withContext Result.success(_telemetry.value)
+        }
+
+        try {
+            val url = URL("https://api.tago.io/data?query=last_value")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.setRequestProperty("Device-Token", token)
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.connectTimeout = 7000
+            conn.readTimeout = 7000
+
+            val responseCode = conn.responseCode
+            if (responseCode in 200..299) {
+                val reader = BufferedReader(InputStreamReader(conn.inputStream))
+                val response = reader.readText()
+                reader.close()
+
+                val jsonResponse = JSONObject(response)
+                val resultArray = jsonResponse.optJSONArray("result") ?: JSONArray()
+
+                var occ = _telemetry.value.occupied
+                var user = _telemetry.value.currentUser
+                var curt = _telemetry.value.curtains
+                var ac = _telemetry.value.acOn
+                var temp = _telemetry.value.temperature
+                var light = _telemetry.value.lightColor
+                var alert = _telemetry.value.lastAlert
+
+                for (i in 0 until resultArray.length()) {
+                    val item = resultArray.getJSONObject(i)
+                    val variable = item.optString("variable")
+                    val value = item.opt("value")?.toString() ?: ""
+
+                    when (variable) {
+                        "presenca" -> occ = value == "1" || value.equals("true", ignoreCase = true)
+                        "usuario" -> user = value
+                        "cortina" -> curt = value
+                        "ar_condicionado" -> ac = value == "1" || value.equals("true", ignoreCase = true)
+                        "temperatura" -> temp = value.toFloatOrNull() ?: temp
+                        "luzes" -> light = value
+                        "alerta" -> alert = value
+                    }
+                }
+
+                val newTelemetry = RoomTelemetry(
+                    occupied = occ,
+                    currentUser = user,
+                    curtains = curt,
+                    acOn = ac,
+                    temperature = temp,
+                    lightColor = light,
+                    lastAlert = alert,
+                    timestamp = System.currentTimeMillis(),
+                    isOnline = true
+                )
+
+                saveLocalTelemetry(newTelemetry)
+                Log.d(TAG, "Sincronização Nuvem TagoIO concluída com sucesso: $newTelemetry")
+                return@withContext Result.success(newTelemetry)
+            } else {
+                Log.w(TAG, "Erro na resposta TagoIO: $responseCode")
+                return@withContext Result.failure(Exception("HTTP $responseCode da TagoIO"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Falha na comunicação com a nuvem TagoIO", e)
+            val offlineTelemetry = _telemetry.value.copy(isOnline = false)
+            _telemetry.value = offlineTelemetry
+            return@withContext Result.failure(e)
+        }
     }
 
-    private companion object {
-        const val TAG = "RoomGateway"
+    /**
+     * Envia comandos de ativação de sala para a nuvem TagoIO.
+     */
+    override suspend fun apply(config: RoomConfig): Result<Unit> = withContext(Dispatchers.IO) {
+        val token = getCloudToken()
+        val jsonPayload = JSONArray().apply {
+            put(JSONObject().put("variable", "comando_power").put("value", 1))
+            put(JSONObject().put("variable", "ar_condicionado").put("value", if (config.acOn) 1 else 0))
+            put(JSONObject().put("variable", "temperatura").put("value", config.temperature))
+            put(JSONObject().put("variable", "cortina").put("value", if (config.curtainsOpen) "Aberta" else "Fechada"))
+            put(JSONObject().put("variable", "luzes").put("value", "#%06X".format(config.lightColor and 0xFFFFFF)))
+            put(JSONObject().put("variable", "alerta").put("value", "Configuração aplicada via App: ${config.name}"))
+        }.toString()
+
+        if (token.isNotBlank()) {
+            try {
+                val url = URL("https://api.tago.io/data")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.setRequestProperty("Device-Token", token)
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.connectTimeout = 7000
+
+                val writer = OutputStreamWriter(conn.outputStream)
+                writer.write(jsonPayload)
+                writer.flush()
+                writer.close()
+
+                val code = conn.responseCode
+                Log.d(TAG, "Comando enviado para TagoIO (HTTP $code): $jsonPayload")
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro ao enviar comando para nuvem", e)
+            }
+        }
+
+        val updated = _telemetry.value.copy(
+            acOn = config.acOn,
+            temperature = config.temperature.toFloat(),
+            curtains = if (config.curtainsOpen) "Aberta" else "Fechada",
+            lastAlert = "Sala ligada: ${config.name}"
+        )
+        saveLocalTelemetry(updated)
+        Result.success(Unit)
+    }
+
+    /**
+     * Envia comando de desligamento para a nuvem TagoIO.
+     */
+    override suspend fun shutdown(): Result<Unit> = withContext(Dispatchers.IO) {
+        val token = getCloudToken()
+        val jsonPayload = JSONArray().apply {
+            put(JSONObject().put("variable", "comando_power").put("value", 0))
+            put(JSONObject().put("variable", "ar_condicionado").put("value", 0))
+            put(JSONObject().put("variable", "cortina").put("value", "Fechada"))
+            put(JSONObject().put("variable", "alerta").put("value", "Sala desligada via App"))
+        }.toString()
+
+        if (token.isNotBlank()) {
+            try {
+                val url = URL("https://api.tago.io/data")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.setRequestProperty("Device-Token", token)
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.connectTimeout = 7000
+
+                val writer = OutputStreamWriter(conn.outputStream)
+                writer.write(jsonPayload)
+                writer.flush()
+                writer.close()
+
+                val code = conn.responseCode
+                Log.d(TAG, "Shutdown enviado para TagoIO (HTTP $code)")
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro ao enviar shutdown para nuvem", e)
+            }
+        }
+
+        val updated = _telemetry.value.copy(
+            acOn = false,
+            curtains = "Fechada",
+            lastAlert = "Sala Desligada"
+        )
+        saveLocalTelemetry(updated)
+        Result.success(Unit)
+    }
+
+    companion object {
+        private const val TAG = "TagoIoRoomGateway"
     }
 }

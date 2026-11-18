@@ -1,73 +1,128 @@
-# Sistema de acesso da sala
+# Projeto de IoT e Sistemas Embarcados: Sala Automatizada
 
-Cada pessoa entra com a própria senha no teclado. Se a senha estiver certa, a cortina abre, a fita de LEDs acende na cor dessa pessoa e o nome aparece na tela. Para sair, aperta `*`: a cortina fecha e as luzes apagam.
+Sistema completo de controle de acesso, automação de ambiente e monitoramento IoT integrado entre **Microcontrolador ESP32 (Arduino / Wokwi)**, **Plataforma IoT na Nuvem (TagoIO)** e **Aplicativo Mobile (Android / Jetpack Compose)**.
 
-A placa é um ESP32. O programa está em `sala_de_aula/sala_de_aula.ino`.
+---
 
-## Usuários
+## 🔗 Links Oficiais do Projeto Online
 
-| Senha | Nome | Cor dos LEDs |
-| --- | --- | --- |
-| 1234 | Joao | Azul |
-| A1B2 | Maria | Verde |
-| 9876 | Carlos | Amarelo |
-| C0D3 | Ana | Roxo |
+- 🌐 **Simulador Wokwi (ESP32):** [Proj Sistemas Embarcados 2.0 - Wokwi](https://wokwi.com/projects/480979869852553217)
+- 📊 **Dashboard na Nuvem (TagoIO):** [Painel de Monitoramento TagoIO](https://admin.us-e1.tago.io/dashboards?page=1&amount=20)
 
-## Como usar o teclado
+---
 
-1. Digite a senha. Cada tecla aparece em amarelo na faixa do meio da tela, e também no Monitor Serial (`115200`).
-2. `#` confirma.
-3. `*` apaga o que foi digitado e volta para a tela inicial.
-4. Senha errada fica 2 segundos na tela e o sistema pede de novo.
-5. Com alguém dentro da sala, `*` faz o logoff.
+## 🏗️ Arquitetura da Solução
 
-As senhas têm letras. `A1B2` usa a tecla A, o 1, a tecla B e o 2.
+```mermaid
+flowchart LR
+    A["ESP32 / Wokwi<br/>(Teclado, TFT, NeoPixel,<br/>Servo Cortina, LED AC Pino 27)"] -->|"HTTPS REST<br/>Telemetria"| B["Plataforma IoT (TagoIO)<br/>• Dashboard em tempo real<br/>• Envio de SMS (Avisos)<br/>• Envio de E-mails (Alertas)"]
+    B -->|"API REST HTTPS<br/>(GET/POST)"| C["App Mobile Android<br/>• Controle de Salas<br/>• Dashboard de Monitoramento<br/>• Relatórios & Histórico"]
+```
 
-## O que aparece na tela ao digitar
+---
 
-A senha continua mascarada: cada tecla vira um `*` amarelo. O Monitor Serial não imprime a senha. Ele só registra entrada, cor do LED, cortina e senha recusada.
+## 1. ☁️ Plataforma IoT na Nuvem (Requisitos Atendidos)
 
-Os GPIO 18 e 19 ligam ao mesmo tempo o teclado e o display. Depois que o teclado lê uma tecla, o desenho seguinte não chega na tela. Antes de escrever, o programa devolve esses pinos ao SPI; antes de ler o teclado, devolve eles para a matriz. Os números dos pinos continuam os mesmos.
+Para este projeto, a nuvem recomendada é a **TagoIO** (gratuita para uso educacional, sem necessidade de cartão de crédito e com SMS / E-mail nativos).
 
-## Ligações
+### Requisitos Atendidos na Nuvem:
+- **a. Dashboard:** Painel visual com widgets para:
+  - Presença na sala (Ocupada / Livre) e usuário autenticado;
+  - Status do Ar Condicionado (Ligado / Desligado);
+  - Medidor de Temperatura da sala (°C);
+  - Estado da Cortina (Aberta / Fechada) e cor da Iluminação;
+  - Gráfico de histórico de temperatura e eventos.
+- **b. Envio de SMS:** Ação automática (*Action*) disparada por eventos críticos (ex: 3 tentativas de senha incorreta ou temperatura elevada).
+- **c. Envio de E-mails:** Ação automática (*Action*) enviando e-mail formatado com avisos de acesso não autorizado e relatórios de uso.
 
-| Função | GPIO |
-| --- | --- |
-| Fita NeoPixel, 8 LEDs, DIN | 15 |
-| Servo da cortina, sinal | 13 |
-| ILI9341 CS | 14 |
-| ILI9341 D/C | 21 |
-| ILI9341 RST | 22 |
-| ILI9341 MOSI | 23 |
-| ILI9341 SCK | 18 |
-| ILI9341 MISO | 19 |
-| Teclado, linhas R1 a R4 | 19, 18, 5, 17 |
-| Teclado, colunas C1 a C4 | 16, 4, 0, 2 |
+### Passo a Passo de Configuração no TagoIO:
+1. Acesse [https://admin.tago.io](https://admin.tago.io) e crie uma conta gratuita.
+2. Em **Devices**, clique em **Add Device**:
+   - Selecione **Custom HTTPS / REST** (ou **Generic Device**);
+   - Dê o nome: `Sala Automatizada`;
+   - Ao criar, copie o **Device Token** gerado.
+3. **Configurar o Dashboard:**
+   - Em **Dashboards**, crie um novo Dashboard Normal.
+   - Adicione os Widgets:
+     - **Card / Display:** para a variável `presenca` e `usuario`;
+     - **Indicator / Switch:** para a variável `ar_condicionado`;
+     - **Radial Gauge / Thermometer:** para a variável `temperatura` (escala 16 a 35 °C);
+     - **Card:** para a variável `cortina` e `alerta`;
+     - **Line Chart:** histórico da variável `temperatura`.
+4. **Configurar Envio de E-mail (Requisito 1c):**
+   - Vá em **Actions** > **Add Action**;
+   - Nome: `Alerta Invasao Email`;
+   - Trigger Type: `By Variable`;
+   - Device: Selecione `Sala Automatizada` | Variable: `alerta` | Condition: `Equal to` -> `Tentativa de Invasao: 3 Senhas Incorretas` (ou `erros_senha >= 3`);
+   - Action: `Send Email`;
+   - Destinatário: Insira seu e-mail ou do professor;
+   - Mensagem: *"ALERTA DE SEGURANÇA: Múltiplas tentativas de acesso inválidas foram detectadas na Sala Automatizada!"*.
+5. **Configurar Envio de SMS (Requisito 1b):**
+   - Em **Actions** > **Add Action**;
+   - Nome: `Alerta Invasao SMS`;
+   - Trigger Type: `By Variable` (`alerta` ou `erros_senha >= 3`);
+   - Action: `Send SMS`;
+   - Número de Telefone: Digite o número com código do país (ex: `+5511999999999`);
+   - Mensagem: *"Alerta Sala: Tentativa de acesso nao autorizada detectada!"*.
 
-O servo e a fita podem ser alimentados pelo 5 V da placa durante a demonstração, com o GND em comum. Se o ESP32 reiniciar quando a cortina se move ou os LEDs acendem juntos, a alimentação de 5 V desses dois precisa vir de uma fonte separada, sempre com o GND ligado ao GND do ESP32.
+---
 
-O GPIO 0 é a coluna das teclas 3, 6, 9 e `#`. Ele também é o pino de boot. A placa chega a iniciar porque o teclado deixa essa coluna em pull-up, mas um curto nessa coluna no instante do reset entra no modo de gravação.
+## 2. 📱 Aplicativo Mobile (Requisitos Atendidos)
 
-## O que o programa faz em cada etapa
+Desenvolvido em **Android nativo (Kotlin + Jetpack Compose + Material 3 + Room Database)** localizado na pasta `SalaAutomatizada/`.
 
-Na abertura, a cortina fica em 0° e os LEDs apagados. A tela pede a senha.
+### Requisitos Atendidos no App Mobile:
+- **a. App de Monitoramento Mobile:**
+  - **Aba "Salas":** Gerenciamento e personalização de salas, com botão inferior liga/desliga integrado à nuvem e bloqueio inteligente por presença;
+  - **Aba "Monitoramento" (Dashboard Mobile):**
+    - Status de conexão com a nuvem TagoIO em tempo real;
+    - Card do Ar Condicionado com indicador de status (LED azul aceso no ESP32) e medidor de temperatura em °C;
+    - Card de Ocupação da sala indicando o usuário presente;
+    - Card de Iluminação e Cortina;
+    - Banner de Alertas e Notificações (SMS / E-mail).
+  - **Aba "Relatórios":**
+    - Cards com resumo estatístico (Total de acessos, ciclos de ar condicionado ativo, temperatura média);
+    - Linha do tempo completa de eventos (com carimbo de data/hora, tipo de evento, usuário e descrição);
+    - **Botão Exportar Relatório:** Compartilha o relatório formatado em texto para WhatsApp, E-mail, Google Drive ou Bloco de Notas via Android Share Intent;
+    - Opção para limpar histórico.
 
-Senha certa: cortina vai para 90°, os 8 LEDs recebem a cor do usuário e a tela mostra o nome, a cortina aberta e a cor. O Monitor Serial imprime o mesmo estado.
+---
 
-Senha errada: a tela avisa e, dois segundos depois, volta o pedido de senha. O serial registra só o alerta.
+## 3. ⚡ Microcontrolador ESP32 (Sistemas Embarcados)
 
-Logoff: cortina em 0°, fita apagada, tela inicial.
+O programa do ESP32 está em `sala_de_aula/sala_de_aula.ino` e pronto para simulação no **Wokwi** (`sala_de_aula/diagram.json`).
 
-## Gravar no ESP32
+### Componentes e Conexões:
 
-1. Nas preferências da IDE Arduino, em URLs adicionais de placas, use `https://espressif.github.io/arduino-esp32/package_esp32_index.json`. Instale a placa **esp32** by Espressif.
-2. Bibliotecas: Adafruit GFX Library, Adafruit BusIO, Adafruit ILI9341, Adafruit NeoPixel, Keypad e ESP32Servo.
-3. Abra `sala_de_aula/sala_de_aula.ino`.
-4. Placa: **ESP32 Dev Module**. Monitor Serial: **115200**.
-5. Envie o programa. O Monitor Serial fica em 115200 e não lista as senhas.
+| Componente | Função | Pino GPIO do ESP32 |
+| :--- | :--- | :--- |
+| **LED Ar Condicionado** | **Indicador de Ar Condicionado (NOVO)** | **GPIO 27** |
+| Fita NeoPixel (8 LEDs) | Iluminação personalizada do usuário | GPIO 15 |
+| Servo Motor | Abertura/fechamento da cortina | GPIO 13 |
+| Display TFT ILI9341 | Tela de status e mensagens (CS / DC / RST) | GPIO 14, 21, 22 |
+| Display TFT SPI | Barramento SPI (MOSI / SCK / MISO) | GPIO 23, 18, 19 |
+| Teclado Matricial 4x4 | Linhas R1 a R4 | GPIO 19, 18, 5, 17 |
+| Teclado Matricial 4x4 | Colunas C1 a C4 | GPIO 16 (RX2), 4, 25, 2 |
 
-## Simular no Wokwi
+### Funcionamento do Ar Condicionado e Alertas:
+- **Ao autenticar com sucesso:** O ar condicionado é **LIGADO** (LED azul no pino 27 acende), a cortina abre para 90°, os LEDs NeoPixel acendem na cor do usuário, a tela mostra as boas-vindas e a temperatura vai para 22°C. Uma mensagem HTTP POST é enviada à TagoIO.
+- **Ao digitar senha incorreta:** O display mostra erro. Caso ocorram 3 erros consecutivos, um pacote com `alerta = "Tentativa de Invasao: 3 Senhas Incorretas"` é disparado para a nuvem TagoIO, ativando imediatamente as **Actions de SMS e E-mail**.
+- **Ao deslogar com `*`:** O ar condicionado é **DESLIGADO** (LED azul no pino 27 apaga), a cortina fecha para 0°, a fita de LEDs apaga, a temperatura volta para ambiente (27°C) e a nuvem é notificada da desocupação da sala.
 
-A pasta `sala_de_aula` tem o `diagram.json` com esta mesma fiação e o `libraries.txt`. O RST do ILI9341 no simulador não é ligado: o Wokwi ignora esse pino, e o GPIO 22 continua sendo o reset no hardware real.
+---
 
-Os pinos do sketch são os da montagem: tela em CS 14, D/C 21 e RST 22, fita no 15, servo no 13, linhas do teclado em 19, 18, 5 e 17, colunas em 16, 4, 0 e 2.
+## 🚀 Como Executar o Projeto Completo
+
+### 1. No Wokwi (Simulação do ESP32):
+1. Abra o arquivo `sala_de_aula/sala_de_aula.ino`.
+2. No código, insira o seu **Device Token** da TagoIO na variável `TAGO_DEVICE_TOKEN`.
+3. Inicie a simulação. O ESP32 conectará na rede virtual `Wokwi-GUEST` e enviará a telemetria diretamente para a internet!
+4. Digite senhas válidas (`1234`, `A1B2`, `9876`, `C0D3`) seguidas de `#`: veja o LED azul do Ar Condicionado acender, cortina abrir e dados subirem para o TagoIO.
+5. Digite senhas erradas 3 vezes para testar o envio de alerta de SMS e e-mail.
+
+### 2. No Aplicativo Android (Android Studio):
+1. Abra a pasta `SalaAutomatizada` no Android Studio.
+2. Execute em um emulador ou celular físico.
+3. Crie uma conta ou faça login.
+4. Na aba **Monitoramento**, toque no ícone de chave no canto superior e cole o mesmo **Device Token** da TagoIO.
+5. Pronto! Os dados do ESP32 e da nuvem aparecem ao vivo na tela de **Monitoramento** e geram os relatórios na aba **Relatórios**.

@@ -33,6 +33,21 @@ data class RoomConfig(
     val temperature: Int        // °C
 )
 
+/**
+ * Registro histórico de eventos da sala (acessos, acionamentos de ar condicionado, alertas de segurança).
+ * Utilizado para gerar telas e relatórios no aplicativo mobile.
+ */
+@Entity(tableName = "room_event_logs")
+data class RoomEventLog(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val timestamp: Long = System.currentTimeMillis(),
+    val eventType: String, // "ENTRADA", "SAIDA", "ALERTA", "AR_CONDICIONADO", "SISTEMA"
+    val userName: String = "Sistema",
+    val description: String,
+    val temperature: Float = 22.0f,
+    val acState: Boolean = false
+)
+
 @Dao
 interface UserDao {
     @Query("SELECT * FROM users WHERE email = :email LIMIT 1")
@@ -57,10 +72,26 @@ interface ConfigDao {
     suspend fun delete(config: RoomConfig)
 }
 
-@Database(entities = [User::class, RoomConfig::class], version = 1, exportSchema = false)
+@Dao
+interface EventLogDao {
+    @Query("SELECT * FROM room_event_logs ORDER BY timestamp DESC")
+    fun observeAll(): Flow<List<RoomEventLog>>
+
+    @Query("SELECT * FROM room_event_logs ORDER BY timestamp DESC LIMIT :limit")
+    suspend fun getRecent(limit: Int): List<RoomEventLog>
+
+    @Insert
+    suspend fun insert(log: RoomEventLog)
+
+    @Query("DELETE FROM room_event_logs")
+    suspend fun clearAll()
+}
+
+@Database(entities = [User::class, RoomConfig::class, RoomEventLog::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun userDao(): UserDao
     abstract fun configDao(): ConfigDao
+    abstract fun eventLogDao(): EventLogDao
 
     companion object {
         @Volatile private var instance: AppDatabase? = null
@@ -71,7 +102,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "sala_automatizada.db"
-                ).build().also { instance = it }
+                )
+                .fallbackToDestructiveMigration()
+                .build().also { instance = it }
             }
     }
 }
